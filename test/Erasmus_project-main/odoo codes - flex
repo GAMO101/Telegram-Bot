@@ -1,0 +1,92 @@
+import json
+import xmlrpc.client
+import ssl
+from datetime import datetime
+
+url = "http://148.251.132.24:8069"
+db = "student"
+username = 'student'
+password = "student"
+
+# Use SSL/TLS properly
+context = ssl.create_default_context()
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+
+common = xmlrpc.client.ServerProxy('{}/xmlrpc/2/common'.format(url), verbose=False, use_datetime=True, context=context)
+common.version()
+uid = common.authenticate(db, username, password, {})
+models = xmlrpc.client.ServerProxy('{}/xmlrpc/2/object'.format(url), verbose=False, use_datetime=True, context=context)
+
+# Load event data from JSON file
+with open('events.json') as f:
+    events_data = json.load(f)
+
+# Mapping of German month abbreviations to English
+month_abbreviations = {
+    "Jan": "Jan",
+    "Feb": "Feb",
+    "Mrz": "Mar",
+    "Apr": "Apr",
+    "Mai": "May",
+    "Jun": "Jun",
+    "Jul": "Jul",
+    "Aug": "Aug",
+    "Sep": "Sep",
+    "Okt": "Oct",
+    "Nov": "Nov",
+    "Dez": "Dec"
+}
+
+# Get current year
+current_year = datetime.now().year
+
+# Create calendar events from loaded data
+for event in events_data:
+    date_parts = event['Date'].split(' - ')
+    print("Date parts:", date_parts)  # Debugging
+    start_time_str = date_parts[0]
+    print("Start time string:", start_time_str)  # Debugging
+    try:
+        # Split the start time string into components
+        day, month_abbrev, time = start_time_str.split(' ')
+        # Get the corresponding English month abbreviation
+        month_abbrev = month_abbreviations.get(month_abbrev, None)
+        if month_abbrev is None:
+            raise ValueError("Invalid month abbreviation")
+        # Concatenate the components into a format recognizable by strptime
+        start_time_str = f"{day} {month_abbrev} {current_year} {time}"
+        start_time = datetime.strptime(start_time_str, "%d %b %Y %H:%M")
+        print("Start time:", start_time)  # Debugging
+    except ValueError as e:
+        print("Error parsing start time string:", e)
+        continue
+
+    end_time_str = date_parts[1]
+
+    # Concatenate end time with the date part from start time
+    end_time = datetime.strptime(start_time.strftime("%Y-%m-%d ") + end_time_str, "%Y-%m-%d %H:%M")
+    print("End time:", end_time)  # Debugging
+
+    # Check if the event already exists with the same start and end time
+    existing_event_ids = models.execute_kw(db, uid, password, 'calendar.event', 'search', [[
+        ('start', '=', start_time.strftime('%Y-%m-%d %H:%M:%S')),
+        ('stop', '=', end_time.strftime('%Y-%m-%d %H:%M:%S'))
+    ]])
+
+    if existing_event_ids:
+        print("Event already exists, skipping creation.")
+        continue
+
+    event_data = {
+        'name': event['Title'],
+        'start': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'stop': end_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'description': event['Link'],
+        'location': event['Link'],
+    }
+    try:
+        event_id = models.execute_kw(db, uid, password, 'calendar.event', 'create', [event_data])
+        print("New event created with ID:", event_id)
+    except Exception as e:
+        print("Error creating event:", e)
